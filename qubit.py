@@ -1,3 +1,5 @@
+from typing import Optional
+
 import scipy.stats
 import scipy.linalg
 import scipy.sparse.linalg
@@ -7,8 +9,7 @@ import scipy
 from scipy.integrate import ode
 from hamiltonian import Hamiltonian
 from fields import ControlFields
-import util
-
+from states import StateVector
 
 '''Krotov algorithm for Open Quantum Systems'''
 
@@ -22,6 +23,8 @@ dt
 
 
 class Krotov:
+    dt: float
+
     def __init__(self, H:Hamiltonian, t_i, t_f, num_t, target):
 
         # Hamiltonian
@@ -39,15 +42,15 @@ class Krotov:
         self.fields = ControlFields(num_t, H)
 
         # Density Matrix
-        self.col_rho = np.zeros((self.num_t, self.H.num_basis ** 2), dtype='complex')
-        self.col_chi = np.zeros((self.num_t, self.H.num_basis ** 2), dtype='complex')
+        self.rho = StateVector(num_t, self.dt, H)
+        self.chi = StateVector(num_t, self.dt, H)
 
         # Time Independent Lindbladian
         self.target_interaction = self.H.apply_time_evolution_operator(target, self.t[-1])
 
     # Sets initial rho
     def set_rho(self, array):
-        self.col_rho[0] = array
+        self.rho.initial_state(array)
 
     '''
 	The equation becomes 
@@ -65,80 +68,50 @@ class Krotov:
     def O(self, psi):
         return (np.vdot(self.target_interaction, psi) * self.target_interaction)
 
-    # Returns <<PSI|O|PSI>>>
-    def Overlap(self, psi):
-        return (np.vdot(psi, self.O(psi)))
-
-    def update_Epsilon(self, t_index):
-        t = t_index
-        part1 = (1 - self.delta) * self.Ex_tilde[t - 1]
-        part2 = -self.delta * self.gamma * np.imag(
-            np.vdot(self.col_chi[t - 1], np.dot(self.mu(t), self.col_rho[t]))) / self.alpha
-        self.Ex[t] = -(part1 + part2)
-
-    def update_Epsilon_tilde(self, t_index):
-        t = t_index
-        part1 = (1 - self.eta) * self.Ex[t]
-        part2 = -self.eta * self.gamma * np.imag(
-            np.vdot(self.col_chi[t], np.dot(self.mu(t), self.col_rho[t]))) / self.alpha
-        self.Ex_tilde[t] = -(part1 + part2)
-
     def evolution_Psi(self, string='not initial'):
-        if string == 'initial':
-            for t in range(0, self.num_t - 1):
-                self.update_Psi(t)
-        else:
-            for t in range(0, self.num_t - 1):
-                self.update_Epsilon(t)
-                self.update_Psi(t)
-            t = self.num_t - 1
-            self.update_Epsilon(t)
+        self.fields.evolve_control(self.chi,self.rho)
+        self.rho.evolution_update()
+        T = self.num_t - 1
+        self.fields.update_control(T, self.chi, self.rho)
 
     def evolution_Chi(self):
-        for t in range(self.num_t - 1, 0, -1):
-            self.update_Epsilon_tilde(t)
-            self.update_Chi(t)
+        self.fields.evolve_control_tilde(self.chi, self.rho)
+        self.chi.evolution_update(forward=False)
         t = 0
-        self.update_Epsilon_tilde(t)
+        self.fields.update_control_tilde(t, self.chi, self.rho)
 
     def Run_Krotov(self, num_iter):
         T = self.num_t - 1
-        self.evolution_Psi('initial')
+        self.rho.evolution_update()
 
-        self.overlap = []
         self.cost = []
         self.oint = []
 
         for i in range(0, num_iter):
             print("Iteration : {} out of {}".format(i + 1, num_iter))
-            self.col_chi[T] = self.O(self.col_rho[T])
+            self.chi.operator_update(self.O, self.rho)
             self.evolution_Chi()
             self.evolution_Psi()
-            self.overlap.append(self.Overlap(self.col_rho[T]))
-            self.oint.append(self.Overlap_Integral())
             self.cost.append(self.J())
 
+    # Returns <<PSI|O|PSI>>>
+    def Overlap(self, psi):
+        return (np.vdot(psi, self.O(psi)))
 
     def Overlap_Integral(self):
         T_index = self.num_t - 1
-
-        ket = self.col_rho[T_index]
+        ket = self.rho.states[T_index]
         bra = ket
         newKet = self.O(ket)
-
         val = np.vdot(bra, newKet)
-
-        return (val)
+        return val
 
     # Cost Function J
     def J(self):
-        integration = scipy.integrate.simps(self.Ex ** 2, x=self.t, dx=self.dt)
-
-        J = self.alpha * integration
-
-        return (J)
-
-
+        xi = self.fields.control.values
+        integration = scipy.integrate.simps(xi ** 2, x=self.t)
+        J = self.Overlap_Integral() - self.fields.alpha * integration
+        return J
 
 
 def T_final(T_e_free, s):
