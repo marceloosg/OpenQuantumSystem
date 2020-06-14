@@ -3,7 +3,7 @@ import util
 
 
 class KrotovParams:
-    def __init__(self, eta=1.5, delta=1.5, alpha=0.001, epsilon=0.01, gamma=1., omega=2.,
+    def __init__(self, eta=1.5, delta=1.5, alpha=0.001, epsilon=0.1, gamma=0.1, omega=2.,
                  rho_init=np.array([[0.5, -0.19j], [0.19j, 0.5]], dtype='complex'),
                  rho_target=np.array([[0.4, 0], [0, 0.6]], dtype='complex'),
                  num_t=2000, speedup_factor=2):
@@ -43,17 +43,16 @@ class KrotovParams:
         assert np.real(self.target[3]+self.target[0]) == 1, "Density matrix sanity check"
         assert np.real(gnd) >= 0.5, "gnd < 0.5 implies negative fixed point for the density matrix"
         assert np.real(gnd) > 0.5, "gnd({}) == 0.5 implies null fixed point, null beta, infinite temperature".format(gnd)
-
-        nbar = (1-gnd)/(2*gnd-1)
-        r_fp = 2*gnd-1
+        y = gnd / (1.0  - gnd)
+        nbar = 1.0 / (y - 1)
+        r_fp = (y - 1) / (y + 1)
+        #nbar = (1-gnd)/(2*gnd-1)
+        #r_fp = 2*gnd-1
         return nbar, r_fp
 
     def calculate_t_epsilon_free(self):
-        # r_fp = 1 / (2 * self.n_bar + 1)
-        gamma2 = self.gamma / self.r_fp
         rho0 = self.rho
         I = np.array([[1, 0], [0, 1]])
-
         r = 2 * rho0 - I
         rz_0 = r[0, 0]
         rx_0 = np.real(r[0, 1])
@@ -61,9 +60,8 @@ class KrotovParams:
 
         alpha = rx_0 ** 2 + ry_0 ** 2
         beta = rz_0 + self.r_fp
-
-        t_e_free = np.log((-alpha ** 2 +
-                           np.sqrt(alpha ** 4 - 16 * self.epsilon * beta ** 2)) / (2 * beta ** 2) / (-gamma2))
+        x=(-alpha +np.sqrt(alpha ** 2 + 16 * self.epsilon **2 * beta ** 2) )/ (2 * beta ** 2)
+        t_e_free = -np.log(x)/ (2*self.gamma)
 
         return t_e_free
 
